@@ -25,8 +25,9 @@ def export_note(db,id):
     if item.status!='approved':raise HTTPException(409,'仅已同意的试样计划可分发')
     run=get_run(db,item.run_id);r=run.result;out=io.StringIO();w=csv.writer(out)
     w.writerow(['note','sample_id','reviewer','reviewer_note','protocol','fingerprint','scope']);w.writerow([item.name,item.sample_id,item.reviewed_by,item.reviewer_note,item.protocol,r['fingerprint'],'偏好权重敏感性；不是统计置信、后验或采购建议'])
-    w.writerow(['criterion','direction','unit','normalized_center_weight','alpha'])
-    for c,weight,alpha in zip(r['criteria'],r['center_weights'],r['alpha']):w.writerow([c['code'],c['direction'],c['unit'],weight,alpha])
+    w.writerow(['criterion','kind','formula','direction','unit','normalized_center_weight','alpha'])
+    for c,weight,alpha in zip(r['criteria'],r['center_weights'],r['alpha']):
+        w.writerow([c['code'],c.get('kind','base'),c.get('formula',''),c['direction'],c['unit'],weight,alpha])
     w.writerow(['code','name','closeness','average_rank','scenario_best_rank','scenario_worst_rank','rank_q025','rank_q975','first_share','rank_frequency'])
     for s in r['samples']:w.writerow([s['code'],s['name'],s['score'],s['rank'],s['rank_min'],s['rank_max'],s['rank_low'],s['rank_high'],s['first_share'],json.dumps(s['rank_frequency'])])
     return '\ufeff'+out.getvalue()

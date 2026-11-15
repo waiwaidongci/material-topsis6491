@@ -12,6 +12,7 @@ class RunInput(BaseModel):
 class RunSummary(RunInput):
     id:int
     status:str
+    definition_version:str=''
     summary:dict
     error:str
     created_at:datetime

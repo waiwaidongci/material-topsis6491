@@ -1,12 +1,27 @@
 # 芦砚声学材料权衡册
 
-把不同量纲的机构材料试样，放进可复算的多准则权衡；保留每次偏好权重变化，再由负责人审阅试样验证计划。
+把不同量纲的机构材料试样，放进可复算的多准则权衡；研究组可自定义基础量、单位、量纲与逐级派生指标，保留每次偏好权重变化，再由负责人审阅试样验证计划。
 
 ## 研究室里的工作
 
 芦砚声学材料研究室有13位产品研究员，为展厅、会议室与薄型走廊研发声学板样。上游检测组提供 `LYM_20261112_试样汇总.csv`，记录36份匿名机构试样的吸声、耐冲击、碳强度、单位面积单价和厚度。研究员过去手工把量纲不同的列相加，成本方向偶尔写反；改了一组权重后排名变动很大，纪要却只留下第一名。
 
 本册替代“核对数据/方向→写明偏好→权衡与敏感性→提出验证问题→审阅分发”这一段。下游实验员收到已批准的试样计划CSV，开展独立湿热、吸声与冲击复测。候选排名不等于合格率，系统不采集真实供应商报价，不作采购建议。
+
+## 基础量与逐级派生指标
+
+固定五列已无法表达“面密度、单位厚度吸声”这类研究自定义口径，系统改为基础量 + 可互相引用的派生指标：
+
+- **基础量（base_metrics）**：研究按代码登记名称、显示单位与五维量纲指数（长度、质量、时间、电流、货币）。迁移保留的五项固定基础量仍读写原列；新基础量存入 `sample_measurements`，测量值允许显式 NULL 表示登记缺测。
+- **派生指标（criteria.kind=derived）**：用受限公式引用同研究的固定基础量、自定义基础量或已定义派生指标，如 `absorption / thickness`、`price / areal_density`。允许 `sqrt/log/exp/abs/min/max` 与四则运算、非负字面量幂；不允许属性访问、任意调用或导入。
+- **量纲检查**：公式 AST 同时驱动数值求值、量纲推断与依赖提取，三者不会分歧。加减两侧量纲必须一致；`log/exp` 只接受无量纲量；非整数次幂只能作用于无量纲量。声明量纲与推导量纲不一致、引用未定义量、循环引用都会在保存时以 422 拒绝，不写入。
+- **缺测传播**：任一上游基础量缺测，下游派生值在同一试样逐级置空并保留原因链；派生结果非有限、为负、除零或负数开方同样排除。`GET /metrics/preview` 逐试样返回推导树（公式、输入、结果、排除原因），与冻结校验完全同源。
+- **增量重算**：基础测量或定义变更后，只失效并重算受影响的下游派生链（`derived_values` 按 派生指标×试样 缓存并附 trace）；无关缓存行保持不变。
+- **并发编辑**：基础量与指标都带 `version` 乐观锁，旧版本提交得到 409/428，需基于最新版本重做编辑。
+
+### 冻结的完整性
+
+建立权衡时，基础量值、派生值与逐级来源（provenance trace）在**单个事务**内冻结为同一完整定义版本（`definition_version` 为定义内容的 SHA256）。任一候选缺测或不可计算，整笔任务不创建、不发布半算结果，错误体直接给出与预览一致的排除清单。worker 只从冻结快照复算，之后的定义或测量修改不影响已排队/已完成的任务。
 
 | 角色 | 页面 | 权限 | 典型动作 |
 |---|---|---|---|
@@ -42,7 +57,7 @@ docker compose exec -T backend python -m scripts.seed_demo
 
 前端 `http://localhost:18227`，后端API文档 `http://localhost:19227/docs`；MySQL `localhost:17727`，库/用户 `material`，密码见 `.env.example`。健康接口 `/health` 同时检查数据库与Redis。
 
-`SEED_DEMO=true` 后端启动时尝试插入演示输入，失败记日志不阻塞。自然键为研究code、全局试样code、指标study_id+code、账号email；重复seed不覆盖研究候选集合/背景、测量值/名称、方向/中心权重，不创建额外计算。默认3研究、36试样、15指标、3角色账号。
+`SEED_DEMO=true` 后端启动时尝试插入演示输入，失败记日志不阻塞。自然键为研究code、全局试样code、指标study_id+code、基础量study_id+code、账号email；重复seed不覆盖研究候选集合/背景、测量值/名称、方向/中心权重、基础量/公式定义，不创建额外计算。默认4研究（新增 `LY-DERIVED` 面密度与单位厚度吸声派生权衡，含1份面密度缺测试样用于演示传播与排除）、36试样、研究自定义面密度基础量、3角色账号。
 
 来源文件名是溯源元数据。材料可逐份录入/编辑，也可通过API批量调用；未实现任意CSV自动解析或真实检测设备采集。共享资料库修改会影响未来任务，已经提交的冻结快照保持原样。
 
@@ -56,7 +71,7 @@ docker compose exec -T backend python -m scripts.seed_demo
 | db | MySQL8，命名数据卷 | TCP mysqladmin ping |
 | redis | Redis7 AOF，队列唤醒/登录限流 | redis-cli ping |
 
-恰好5服务，frontend/backend/worker依赖上游healthy；DB、Redis与共享 `/artifacts` 使用命名卷。MySQL测量值、Criterion.center_weight、DecisionRun.concentration 均显式 `DOUBLE(asdecimal=False)`，不使用默认FLOAT或Decimal截断。完整快照、1000情景及结果采用JSON。Nginx `/api/` 剥离一次前缀，Python路由不再带 `/api`。
+恰好5服务，frontend/backend/worker依赖上游healthy；DB、Redis与共享 `/artifacts` 使用命名卷。MySQL测量值、Criterion.center_weight、DecisionRun.concentration、派生缓存值均显式 `DOUBLE(asdecimal=False)`，不使用默认FLOAT或Decimal截断。完整快照、1000情景及结果、派生溯源trace采用JSON。Nginx `/api/` 剥离一次前缀，Python路由不再带 `/api`。
 
 | 环境变量 | 用途 / 默认 |
 |---|---|
@@ -88,21 +103,22 @@ C_i = D_i− / (D_i+ + D_i−)
 
 每次保留权重、所有材料贴近度/平均名次/首位份额，汇总真实最好/最差、频率与2.5%/97.5%经验名次分位（线性插值可为小数）。κ控制偏好分散程度，不是样本量。范围是人为偏好情景的敏感性描述，不是统计置信区间、贝叶斯后验或采购建议。没有用真实人群抽样估计偏好。
 
-所有指标为有限非负物理值，使用本册规定单位与范围；未实现自动单位换算、碳抵消记账或缺测插补。正比例换单位在数值精度范围内不改变结果，指标平移通常不保持；候选增删会改变范数和理想点，可能逆转原候选排名。贴近度和排名仅相对于当前候选与口径，不能直接跨研究比较为绝对品质。
+所有纳入冻结的指标值为有限非负物理值，使用本册登记的单位与量纲；未实现自动单位换算、碳抵消记账或缺测插补——缺测显式登记并沿派生链传播、在预览与冻结时排除，而不是被填补。正比例换单位在数值精度范围内不改变结果，指标平移通常不保持；候选增删会改变范数和理想点，可能逆转原候选排名。贴近度和排名仅相对于当前候选与口径，不能直接跨研究比较为绝对品质。
 
 SHA256覆盖算法版本、完整冻结快照、原始中心权重、κ、情景数和seed。固定软件与输入可完整复算，结果同时存数据库和 `/artifacts/run-<id>.json`。指纹包含数据库ID，重建库或改变来源标识不保证相同指纹。运行列表只返回轻量摘要；详情按需读取完整情景，避免轮询反复搬运大JSON。
 
 ## 工程结构与开发
 
 ```text
-backend/src/{models,schemas,services,controllers,routes}  五个独立业务链
-backend/src/services/{normalization,topsis,weight_sensitivity}.py
+backend/src/{models,schemas,services,controllers,routes}  独立业务链
+backend/src/services/derivation/{dimensions,formula,graph}.py  量纲/公式/依赖图引擎
+backend/src/services/{normalization,topsis,weight_sensitivity,freeze_service,derivation_service}.py
 backend/src/{config,constants,middlewares,utils}/
 backend/{scripts/seed_demo.py,migrations/001_initial.sql}
 frontend/src/{api,stores,types,constants,components/common,hooks,pages,router,utils}/
 ```
 
-CandidateStudy、MaterialSample、Criterion、DecisionRun、TrialNote分别有独立model/schema/service/controller/route/API。studyStore管理研究及指标、sampleStore管理资料、researchStore管理任务/计划；六页为总览、输入口径、配置、结果、审阅、审计，登录另计。StudySelect复用于总览/输入/配置，PageHeading、ErrorNotice、StatusBadge等共享；RunSelect、WeightStrip、RankIntervals负责业务展示。
+CandidateStudy、MaterialSample、BaseMetric/SampleMeasurement、Criterion（base/derived）、DerivedValue、DecisionRun、TrialNote分别有独立model/schema/service/controller/route/API。studyStore管理研究、指标、基础量与派生预览，sampleStore管理资料（含自定义测量与显式缺测），researchStore管理任务/计划；六页为总览、输入口径（材料/基础量/指标与公式/派生预览四个标签）、配置、结果、审阅、审计，登录另计。StudySelect复用于总览/输入/配置，PageHeading、ErrorNotice、StatusBadge等共享；RunSelect、WeightStrip、RankIntervals负责业务展示。
 
 共享枚举Role、RunStatus、NoteStatus、Direction、MetricCode位于 `backend/src/constants/enums.py` 与 `frontend/src/constants/enums.ts`（类型联集在 `frontend/src/types/domain.ts`）；被auth依赖、criterion/note schema、services/worker状态、前端状态组件、口径与运行/结果/审阅页使用。
 
@@ -124,6 +140,6 @@ npm ci
 npm run dev -- --port 18227
 ```
 
-Vite开发代理19227并剥离一次 `/api`。本地worker需可写 `/artifacts`，默认推荐Compose共享卷。metadata.create_all创建缺表；迁移目录给出初始DDL供审阅，不提供生产版本升级器。字体Google Fonts Noto Sans SC与ZCOOL XiaoWei，离线回退Georgia/serif。
+Vite开发代理19227并剥离一次 `/api`。本地worker需可写 `/artifacts`，默认推荐Compose共享卷。metadata.create_all创建缺表；迁移目录给出初始DDL供审阅。旧库（仅有固定五列）启动时由 `src/config/upgrade.py` 执行幂等 MySQL ALTER：放宽五列为可空、补齐 criteria 的 kind/formula/dims/version、新增 base_metrics、sample_measurements、derived_values 与 decision_runs.definition_version，并回填旧指标量纲。旧权衡快照（v1 结构、仅五列）与已批准计划保持原样可读、可复算、可导出，新快照标记 `schema_version=derived-v2` 并携带定义版本与溯源。该升级器按方言启用，非 MySQL 跳过。字体Google Fonts Noto Sans SC与ZCOOL XiaoWei，离线回退Georgia/serif。
 
-真实测试、截图、手算oracle、权限、seed与已知差异存于批次独立 `test-artifacts/gb-0023`。收尾 `docker compose down -v --remove-orphans` 会删除本题数据库、Redis和结果卷。MIT License。
+真实测试、截图、手算oracle、权限、seed与已知差异存于批次独立 `test-artifacts/gb-0023`。派生引擎（公式解析、量纲、循环、缺测传播、增量重算、冻结拒绝、HTTP 权限与并发冲突）的自动化测试在 `backend/tests`，用内存 SQLite + 假 Redis 运行 `python -m pytest tests/`。收尾 `docker compose down -v --remove-orphans` 会删除本题数据库、Redis和结果卷。MIT License。

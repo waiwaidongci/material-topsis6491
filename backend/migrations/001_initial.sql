@@ -30,11 +30,11 @@ CREATE TABLE material_samples (
 	code VARCHAR(40) NOT NULL,
 	name VARCHAR(100) NOT NULL,
 	family VARCHAR(100) NOT NULL,
-	absorption DOUBLE NOT NULL,
-	impact DOUBLE NOT NULL,
-	carbon DOUBLE NOT NULL,
-	price DOUBLE NOT NULL,
-	thickness DOUBLE NOT NULL,
+	absorption DOUBLE NULL,
+	impact DOUBLE NULL,
+	carbon DOUBLE NULL,
+	price DOUBLE NULL,
+	thickness DOUBLE NULL,
 	batch VARCHAR(100) NOT NULL,
 	PRIMARY KEY (id),
 	UNIQUE (code)
@@ -56,6 +56,37 @@ CREATE TABLE users (
 ;
 
 
+-- 研究自定义基础量：代码、显示单位与五维量纲（length,mass,time,current,currency）
+CREATE TABLE base_metrics (
+	id INTEGER NOT NULL AUTO_INCREMENT,
+	study_id INTEGER NOT NULL,
+	code VARCHAR(30) NOT NULL,
+	name VARCHAR(100) NOT NULL,
+	unit VARCHAR(50) NOT NULL,
+	dims JSON NOT NULL,
+	version INTEGER NOT NULL DEFAULT 1,
+	PRIMARY KEY (id),
+	UNIQUE (study_id, code),
+	FOREIGN KEY(study_id) REFERENCES candidate_studies (id)
+)
+
+;
+
+
+-- 每个试样每个基础量一行；value 显式 NULL 表示登记缺测，参与缺测传播
+CREATE TABLE sample_measurements (
+	id INTEGER NOT NULL AUTO_INCREMENT,
+	sample_id INTEGER NOT NULL,
+	metric_code VARCHAR(30) NOT NULL,
+	value DOUBLE NULL,
+	PRIMARY KEY (id),
+	UNIQUE (sample_id, metric_code),
+	FOREIGN KEY(sample_id) REFERENCES material_samples (id)
+)
+
+;
+
+
 CREATE TABLE criteria (
 	id INTEGER NOT NULL AUTO_INCREMENT,
 	study_id INTEGER NOT NULL,
@@ -64,9 +95,30 @@ CREATE TABLE criteria (
 	unit VARCHAR(50) NOT NULL,
 	direction VARCHAR(20) NOT NULL,
 	center_weight DOUBLE NOT NULL,
+	kind VARCHAR(20) NOT NULL DEFAULT 'base',
+	formula VARCHAR(600) NOT NULL DEFAULT '',
+	dims JSON NULL,
+	version INTEGER NOT NULL DEFAULT 1,
 	PRIMARY KEY (id),
 	UNIQUE (study_id, code),
 	FOREIGN KEY(study_id) REFERENCES candidate_studies (id)
+)
+
+;
+
+
+-- 派生值缓存：每个派生指标 × 试样一行，trace 保留逐级来源与排除原因
+CREATE TABLE derived_values (
+	id INTEGER NOT NULL AUTO_INCREMENT,
+	criterion_id INTEGER NOT NULL,
+	sample_id INTEGER NOT NULL,
+	value DOUBLE NULL,
+	trace JSON NOT NULL,
+	updated_at DATETIME NOT NULL,
+	PRIMARY KEY (id),
+	UNIQUE (criterion_id, sample_id),
+	FOREIGN KEY(criterion_id) REFERENCES criteria (id),
+	FOREIGN KEY(sample_id) REFERENCES material_samples (id)
 )
 
 ;
@@ -81,6 +133,7 @@ CREATE TABLE decision_runs (
 	repeats INTEGER NOT NULL,
 	seed INTEGER NOT NULL,
 	status VARCHAR(20) NOT NULL,
+	definition_version VARCHAR(64) NOT NULL DEFAULT '',
 	snapshot JSON NOT NULL,
 	summary JSON NOT NULL,
 	result JSON NOT NULL,

@@ -13,6 +13,9 @@ class DecisionRun(Base):
     repeats:Mapped[int]=mapped_column(default=1000)
     seed:Mapped[int]=mapped_column(default=20261112)
     status:Mapped[str]=mapped_column(String(20),default='queued')
+    # Definition-version fingerprint: frozen values and their provenance belong
+    # to one complete, internally consistent version.
+    definition_version:Mapped[str]=mapped_column(String(64),default='')
     snapshot:Mapped[dict]=mapped_column(JSON,default=dict)
     summary:Mapped[dict]=mapped_column(JSON,default=dict)
     result:Mapped[dict]=mapped_column(JSON,default=dict)
